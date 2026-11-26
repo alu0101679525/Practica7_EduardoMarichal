@@ -1,14 +1,14 @@
 package es.ull.practica7.service;
 
 import es.ull.practica7.model.Astronauta;
-import es.ull.practica7.model.Coordenada;
+import es.ull.practica7.model.TelemetriaISS;
 
 import java.util.List;
 
 /**
- * Abstracción para obtener telemetría orbital.
+ * Abstracción para obtener telemetría orbital y tripulación activa.
  */
 public interface ProveedorDatosOrbitales {
-    Coordenada obtenerPosicionISS() throws Exception;
+    TelemetriaISS obtenerTelemetriaISS() throws Exception;
     List<Astronauta> obtenerTripulacionEnOrbita() throws Exception;
 }

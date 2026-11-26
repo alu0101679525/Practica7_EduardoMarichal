@@ -2,6 +2,7 @@ package es.ull.practica7.subject;
 
 import es.ull.practica7.model.Astronauta;
 import es.ull.practica7.model.Coordenada;
+import es.ull.practica7.model.TelemetriaISS;
 import es.ull.practica7.observer.Sujeto;
 import es.ull.practica7.service.ProveedorDatosOrbitales;
 
@@ -14,14 +15,14 @@ import java.util.Objects;
 
 /**
  * Sujeto Concreto del patrón Observador.
- * Centraliza el estado orbital de la ISS, el punto objetivo vigilado
+ * Centraliza la telemetría en vivo de la ISS, el punto objetivo vigilado
  * y la tripulación activa, notificando automáticamente ante cualquier cambio.
  */
 public class CentroControlOrbital extends Sujeto {
 
     private final ProveedorDatosOrbitales proveedorDatos;
 
-    private Coordenada posicionISS;
+    private TelemetriaISS telemetriaISS;
     private Coordenada puntoObjetivo;
     private double radioAlertaKm;
     private List<Astronauta> astronautasEnOrbita;
@@ -29,29 +30,21 @@ public class CentroControlOrbital extends Sujeto {
 
     public CentroControlOrbital(ProveedorDatosOrbitales proveedorDatos) {
         this.proveedorDatos = Objects.requireNonNull(proveedorDatos);
-        this.posicionISS = new Coordenada(28.4818, -16.3201);
-        this.puntoObjetivo = new Coordenada(28.4818, -16.3201);
+        Coordenada tenerife = new Coordenada(28.4818, -16.3201);
+        this.telemetriaISS = new TelemetriaISS(tenerife, 27600.0, 408.0);
+        this.puntoObjetivo = tenerife;
         this.radioAlertaKm = 1000.0;
         this.astronautasEnOrbita = new ArrayList<>();
         this.horaUltimaActualizacion = "--:--:--";
     }
 
     /**
-     * Consulta las APIs externas, actualiza el estado interno y dispara la notificación.
+     * Consulta las APIs externas, actualiza el estado interno y notifica a los observadores.
      */
     public void actualizarDesdeAPIs() {
         try {
-            this.posicionISS = proveedorDatos.obtenerPosicionISS();
-            List<Astronauta> nuevaTripulacion = proveedorDatos.obtenerTripulacionEnOrbita();
-
-            // Conserva tripulantes añadidos manualmente mediante el botón de demostración
-            List<Astronauta> combinada = new ArrayList<>(nuevaTripulacion);
-            for (Astronauta a : astronautasEnOrbita) {
-                if (a.getNave().contains("Demo") && !combinada.contains(a)) {
-                    combinada.add(a);
-                }
-            }
-            this.astronautasEnOrbita = combinada;
+            this.telemetriaISS = proveedorDatos.obtenerTelemetriaISS();
+            this.astronautasEnOrbita = proveedorDatos.obtenerTripulacionEnOrbita();
             this.horaUltimaActualizacion = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
 
             notificar();
@@ -73,27 +66,19 @@ public class CentroControlOrbital extends Sujeto {
     }
 
     /**
-     * Sitúa el punto objetivo sobre la posición actual de la ISS para probar el radar.
+     * Centra el punto objetivo sobre la posición actual de la estación espacial.
      */
-    public void fijarObjetivoEnISSActual() {
-        this.puntoObjetivo = this.posicionISS;
+    public void centrarObjetivoEnISS() {
+        this.puntoObjetivo = this.telemetriaISS.getCoordenada();
         notificar();
     }
 
-    /**
-     * Añade un astronauta ficticio para comprobar la alerta de cambio de tripulación.
-     */
-    public void simularNuevoAstronauta() {
-        int numero = astronautasEnOrbita.size() + 1;
-        List<Astronauta> actualizada = new ArrayList<>(astronautasEnOrbita);
-        actualizada.add(new Astronauta("Astronauta Invitado #" + numero, "Crew Dragon Demo"));
-        this.astronautasEnOrbita = actualizada;
-        this.horaUltimaActualizacion = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
-        notificar();
+    public TelemetriaISS getTelemetriaISS() {
+        return telemetriaISS;
     }
 
     public Coordenada getPosicionISS() {
-        return posicionISS;
+        return telemetriaISS.getCoordenada();
     }
 
     public Coordenada getPuntoObjetivo() {

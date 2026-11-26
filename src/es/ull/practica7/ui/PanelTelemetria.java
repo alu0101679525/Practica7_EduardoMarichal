@@ -1,6 +1,7 @@
 package es.ull.practica7.ui;
 
 import es.ull.practica7.model.Coordenada;
+import es.ull.practica7.model.TelemetriaISS;
 import es.ull.practica7.observer.Observador;
 import es.ull.practica7.observer.Sujeto;
 import es.ull.practica7.subject.CentroControlOrbital;
@@ -25,8 +26,8 @@ import java.util.Objects;
 import java.util.function.Consumer;
 
 /**
- * Observador Concreto 1: Renderiza el mapamundi equirectangular en alta resolución,
- * soporta zoom con la rueda del ratón, desplazamiento arrastrando y clic para fijar objetivo.
+ * Renderiza un mapamundi equirectangular en alta resolución, la trayectoria orbital,
+ * el punto objetivo con su radio de alerta y los datos de telemetría de la ISS.
  */
 public class PanelTelemetria extends JPanel implements Observador {
 
@@ -39,7 +40,7 @@ public class PanelTelemetria extends JPanel implements Observador {
 
     private final BufferedImage imagenMapa;
     private final List<Coordenada> historialTrayectoria = new ArrayList<>();
-    private Coordenada posicionActualISS = new Coordenada(28.4818, -16.3201);
+    private TelemetriaISS telemetriaActual = new TelemetriaISS(new Coordenada(28.4818, -16.3201), 27600.0, 408.0);
     private Coordenada puntoObjetivo = new Coordenada(28.4818, -16.3201);
     private double radioAlertaKm = 1000.0;
     private String horaActualizacion = "--:--:--";
@@ -52,7 +53,7 @@ public class PanelTelemetria extends JPanel implements Observador {
 
         TitledBorder titulo = BorderFactory.createTitledBorder(
                 new LineBorder(BORDE_PANEL, 1, true),
-                " PanelTelemetria (Observador) ",
+                " Telemetría y Mapa Orbital ",
                 TitledBorder.LEFT,
                 TitledBorder.TOP,
                 new Font("SansSerif", Font.BOLD, 14),
@@ -74,7 +75,8 @@ public class PanelTelemetria extends JPanel implements Observador {
     public void actualizar(Sujeto sujeto) {
         if (sujeto instanceof CentroControlOrbital) {
             CentroControlOrbital control = (CentroControlOrbital) sujeto;
-            Coordenada nuevaPos = control.getPosicionISS();
+            TelemetriaISS nuevaTelemetria = control.getTelemetriaISS();
+            Coordenada nuevaPos = nuevaTelemetria.getCoordenada();
 
             SwingUtilities.invokeLater(() -> {
                 if (historialTrayectoria.isEmpty()
@@ -84,7 +86,7 @@ public class PanelTelemetria extends JPanel implements Observador {
                         historialTrayectoria.remove(0);
                     }
                 }
-                this.posicionActualISS = nuevaPos;
+                this.telemetriaActual = nuevaTelemetria;
                 this.puntoObjetivo = control.getPuntoObjetivo();
                 this.radioAlertaKm = control.getRadioAlertaKm();
                 this.horaActualizacion = control.getHoraUltimaActualizacion();
@@ -100,7 +102,6 @@ public class PanelTelemetria extends JPanel implements Observador {
 
             BufferedImage imgLeida = ImageIO.read(is);
 
-            // Escalamos 5120x2560
             int w = 5120;
             int h = 2560;
             BufferedImage mapaOscuro = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
@@ -137,7 +138,6 @@ public class PanelTelemetria extends JPanel implements Observador {
     private class LienzoMapa extends JPanel {
 
         private double zoom = 1.0;
-        // Desplazamiento normalizado [0..1] de la esquina superior izquierda visible dentro del mapa
         private double vistaX = 0.0;
         private double vistaY = 0.0;
 
@@ -182,7 +182,6 @@ public class PanelTelemetria extends JPanel implements Observador {
                     setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
                     if (!arrastrando) {
                         if (e.getClickCount() == 2) {
-                            // Doble clic resetea el zoom a vista global
                             zoom = 1.0;
                             vistaX = 0.0;
                             vistaY = 0.0;
@@ -199,11 +198,9 @@ public class PanelTelemetria extends JPanel implements Observador {
                     Rectangle area = calcularAreaMapaBase();
                     if (!area.contains(e.getPoint())) return;
 
-                    // Posición relativa del ratón dentro del área base [0..1]
                     double mouseRelX = (e.getX() - area.x) / (double) area.width;
                     double mouseRelY = (e.getY() - area.y) / (double) area.height;
 
-                    // Coordenada normalizada del mapa bajo el cursor antes del zoom
                     double mapaNormX = vistaX + mouseRelX / zoom;
                     double mapaNormY = vistaY + mouseRelY / zoom;
 
@@ -212,7 +209,6 @@ public class PanelTelemetria extends JPanel implements Observador {
 
                     if (Math.abs(nuevoZoom - zoom) > 0.001) {
                         zoom = nuevoZoom;
-                        // Recalcular vistaX/vistaY para mantener el punto bajo el cursor en su sitio
                         vistaX = mapaNormX - mouseRelX / zoom;
                         vistaY = mapaNormY - mouseRelY / zoom;
                         limitarVista();
@@ -253,9 +249,6 @@ public class PanelTelemetria extends JPanel implements Observador {
             }
         }
 
-        /**
-         * Calcula el rectángulo centrado con proporción exacta 2:1 (360° x 180°).
-         */
         private Rectangle calcularAreaMapaBase() {
             int panelW = getWidth();
             int panelH = getHeight();
@@ -283,12 +276,9 @@ public class PanelTelemetria extends JPanel implements Observador {
             g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
 
             Rectangle area = calcularAreaMapaBase();
-
-            // Recortamos el dibujo exactamente al rectángulo del mapa para que al hacer zoom no se salga
             Shape clipAnterior = g2.getClip();
             g2.setClip(area);
 
-            // 1. Dibujar recorte de alta resolución correspondiente al zoom y desplazamiento actuales
             int imgW = imagenMapa.getWidth();
             int imgH = imagenMapa.getHeight();
             int srcX1 = (int) Math.round(vistaX * imgW);
@@ -302,7 +292,7 @@ public class PanelTelemetria extends JPanel implements Observador {
 
             dibujarCuadriculaCoordenadas(g2, area);
 
-            // 2. Círculo perfecto de Radio de Alerta escalado según el zoom
+            // Círculo de Radio de Alerta
             Point2D.Double pObj = coordenadaAPixel(puntoObjetivo, area);
             double gradosAprox = radioAlertaKm / 111.32;
             double radioPx = (gradosAprox / 360.0) * area.width * zoom;
@@ -313,7 +303,7 @@ public class PanelTelemetria extends JPanel implements Observador {
             g2.setStroke(new BasicStroke(1.5f));
             g2.draw(new Ellipse2D.Double(pObj.x - radioPx, pObj.y - radioPx, radioPx * 2, radioPx * 2));
 
-            // 3. Trayectoria orbital amarilla punteada
+            // Trayectoria orbital
             if (historialTrayectoria.size() > 1) {
                 g2.setColor(new Color(255, 212, 59, 220));
                 float[] patronPunteado = {6f, 6f};
@@ -330,20 +320,16 @@ public class PanelTelemetria extends JPanel implements Observador {
                 }
             }
 
-            // 4. Pin rojo del punto objetivo
             dibujarPinObjetivo(g2, (int) pObj.x, (int) pObj.y);
 
-            // 5. Icono de la Estación Espacial Internacional (ISS)
-            Point2D.Double pISS = coordenadaAPixel(posicionActualISS, area);
+            Point2D.Double pISS = coordenadaAPixel(telemetriaActual.getCoordenada(), area);
             dibujarIconoISS(g2, (int) pISS.x, (int) pISS.y);
 
             g2.setClip(clipAnterior);
 
-            // Borde del área del mapa
             g2.setColor(new Color(65, 72, 85));
             g2.drawRect(area.x, area.y, area.width - 1, area.height - 1);
 
-            // 6. Recuadro superpuesto inferior izquierdo con telemetría y nivel de zoom
             dibujarOverlayTelemetria(g2, getHeight());
 
             g2.dispose();
@@ -408,26 +394,34 @@ public class PanelTelemetria extends JPanel implements Observador {
 
         private void dibujarOverlayTelemetria(Graphics2D g2, int panelH) {
             int boxX = 14;
-            int boxY = panelH - 94;
-            int boxW = 285;
-            int boxH = 80;
+            int boxY = panelH - 116;
+            int boxW = 310;
+            int boxH = 102;
 
-            g2.setColor(new Color(22, 26, 33, 225));
+            g2.setColor(new Color(22, 26, 33, 228));
             g2.fillRoundRect(boxX, boxY, boxW, boxH, 10, 10);
             g2.setColor(new Color(80, 88, 102));
             g2.drawRoundRect(boxX, boxY, boxW, boxH, 10, 10);
 
-            String hemLat = posicionActualISS.getLatitud() >= 0 ? "N" : "S";
-            String hemLon = posicionActualISS.getLongitud() >= 0 ? "E" : "O";
+            Coordenada pos = telemetriaActual.getCoordenada();
+            String hemLat = pos.getLatitud() >= 0 ? "N" : "S";
+            String hemLon = pos.getLongitud() >= 0 ? "E" : "O";
 
             g2.setColor(Color.WHITE);
-            g2.setFont(new Font("SansSerif", Font.BOLD, 13));
-            g2.drawString(String.format("Latitud:  %.4f %s", Math.abs(posicionActualISS.getLatitud()), hemLat), boxX + 12, boxY + 22);
-            g2.drawString(String.format("Longitud: %.4f %s   (Zoom: %.1fx)", Math.abs(posicionActualISS.getLongitud()), hemLon, zoom), boxX + 12, boxY + 42);
+            g2.setFont(new Font("SansSerif", Font.BOLD, 12));
+            g2.drawString(String.format("Posición:  %.4f° %s,  %.4f° %s",
+                    Math.abs(pos.getLatitud()), hemLat, Math.abs(pos.getLongitud()), hemLon), boxX + 12, boxY + 22);
 
-            g2.setColor(new Color(165, 175, 190));
+            g2.setColor(new Color(110, 231, 135));
+            g2.drawString(String.format("Velocidad: %,.0f km/h   |   Altitud: %.1f km",
+                    telemetriaActual.getVelocidadKmh(), telemetriaActual.getAltitudKm()), boxX + 12, boxY + 42);
+
+            g2.setColor(new Color(195, 205, 220));
             g2.setFont(new Font("SansSerif", Font.PLAIN, 11));
-            g2.drawString("Rueda: zoom | Arrastrar: mover | Doble clic: reset", boxX + 12, boxY + 64);
+            g2.drawString(String.format("Última telemetría: %s   |   Zoom: %.1fx", horaActualizacion, zoom), boxX + 12, boxY + 64);
+
+            g2.setColor(new Color(145, 155, 170));
+            g2.drawString("Clic: fijar objetivo | Rueda: zoom | Doble clic: reset", boxX + 12, boxY + 84);
         }
     }
 }

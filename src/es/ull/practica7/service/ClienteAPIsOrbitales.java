@@ -2,6 +2,7 @@ package es.ull.practica7.service;
 
 import es.ull.practica7.model.Astronauta;
 import es.ull.practica7.model.Coordenada;
+import es.ull.practica7.model.TelemetriaISS;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -14,44 +15,45 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Implementación concreta que consulta telemetría orbital actualizada en tiempo real
- * desde WhereTheISSAt (posición NORAD) y Corquaid API (tripulación activa).
+ * Cliente HTTP que consulta telemetría orbital en tiempo real desde WhereTheISSAt
+ * y los perfiles completos de la tripulación desde Corquaid API.
  */
 public class ClienteAPIsOrbitales implements ProveedorDatosOrbitales {
 
     private static final String URL_ISS_NOW = "https://api.wheretheiss.at/v1/satellites/25544";
     private static final String URL_ASTROS = "https://corquaid.github.io/international-space-station-APIs/JSON/people-in-space.json";
 
-    // En wheretheiss.at los valores vienen como números decimales (ej: "latitude": -51.725749)
     private static final Pattern PATRON_LAT = Pattern.compile("\"latitude\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
     private static final Pattern PATRON_LON = Pattern.compile("\"longitude\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+    private static final Pattern PATRON_ALT = Pattern.compile("\"altitude\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+    private static final Pattern PATRON_VEL = Pattern.compile("\"velocity\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
 
-    // En corquaid cada objeto de tripulante contiene "name" y "spacecraft" (o "craft")
     private static final Pattern PATRON_OBJETO_PERSONA = Pattern.compile("\\{[^{}]*\"name\"\\s*:\\s*\"([^\"]+)\"[^{}]*\\}");
     private static final Pattern PATRON_NAVE = Pattern.compile("\"(?:spacecraft|craft)\"\\s*:\\s*\"([^\"]+)\"");
+    private static final Pattern PATRON_ROL = Pattern.compile("\"position\"\\s*:\\s*\"([^\"]+)\"");
+    private static final Pattern PATRON_PAIS = Pattern.compile("\"country\"\\s*:\\s*\"([^\"]+)\"");
+    private static final Pattern PATRON_IMAGEN = Pattern.compile("\"image\"\\s*:\\s*\"([^\"]+)\"");
+    private static final Pattern PATRON_FLAG_CODE = Pattern.compile("\"flag_code\"\\s*:\\s*\"([^\"]+)\"");
 
     private final HttpClient httpClient;
 
     public ClienteAPIsOrbitales() {
         this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
+                .connectTimeout(Duration.ofSeconds(6))
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
     }
 
     @Override
-    public Coordenada obtenerPosicionISS() throws Exception {
+    public TelemetriaISS obtenerTelemetriaISS() throws Exception {
         String json = realizarPeticionGet(URL_ISS_NOW);
 
-        Matcher mLat = PATRON_LAT.matcher(json);
-        Matcher mLon = PATRON_LON.matcher(json);
+        double lat = extraerDouble(PATRON_LAT, json, "latitud");
+        double lon = extraerDouble(PATRON_LON, json, "longitud");
+        double alt = extraerDouble(PATRON_ALT, json, "altitud");
+        double vel = extraerDouble(PATRON_VEL, json, "velocidad");
 
-        if (mLat.find() && mLon.find()) {
-            double lat = Double.parseDouble(mLat.group(1));
-            double lon = Double.parseDouble(mLon.group(1));
-            return new Coordenada(lat, lon);
-        }
-        throw new IllegalStateException("Formato inesperado en respuesta de WhereTheISSAt");
+        return new TelemetriaISS(new Coordenada(lat, lon), vel, alt);
     }
 
     @Override
@@ -61,23 +63,39 @@ public class ClienteAPIsOrbitales implements ProveedorDatosOrbitales {
 
         Matcher mPersona = PATRON_OBJETO_PERSONA.matcher(json);
         while (mPersona.find()) {
-            String bloquePersona = mPersona.group(0);
+            String bloque = mPersona.group(0);
             String nombre = mPersona.group(1);
 
-            Matcher mNave = PATRON_NAVE.matcher(bloquePersona);
-            String nave = mNave.find() ? mNave.group(1) : "ISS";
+            String nave = extraerCampoOpcional(PATRON_NAVE, bloque, "ISS");
+            String rol = extraerCampoOpcional(PATRON_ROL, bloque, "Astronauta");
+            String pais = extraerCampoOpcional(PATRON_PAIS, bloque, "");
+            String imagen = extraerCampoOpcional(PATRON_IMAGEN, bloque, null);
+            String codigoBandera = extraerCampoOpcional(PATRON_FLAG_CODE, bloque, "");
 
-            tripulacion.add(new Astronauta(nombre, nave));
+            tripulacion.add(new Astronauta(nombre, nave, rol, pais, imagen, codigoBandera));
         }
 
         return tripulacion;
+    }
+
+    private double extraerDouble(Pattern patron, String texto, String campo) {
+        Matcher m = patron.matcher(texto);
+        if (m.find()) {
+            return Double.parseDouble(m.group(1));
+        }
+        throw new IllegalStateException("No se pudo extraer el campo '" + campo + "' de la telemetría.");
+    }
+
+    private String extraerCampoOpcional(Pattern patron, String bloque, String valorDefecto) {
+        Matcher m = patron.matcher(bloque);
+        return m.find() ? m.group(1) : valorDefecto;
     }
 
     private String realizarPeticionGet(String url) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("User-Agent", "OrbitWatchApp/1.0")
-                .timeout(Duration.ofSeconds(5))
+                .timeout(Duration.ofSeconds(6))
                 .GET()
                 .build();
 

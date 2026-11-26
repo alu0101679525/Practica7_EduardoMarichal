@@ -9,11 +9,12 @@ import javax.swing.border.EmptyBorder;
 import javax.swing.border.LineBorder;
 import javax.swing.border.TitledBorder;
 import java.awt.*;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 
 /**
  * Ventana principal de la aplicación OrbitWatch.
- * Conecta los controles del usuario con el sujeto concreto (CentroControlOrbital)
- * y organiza visualmente los tres Observadores Concretos.
  */
 public class VentanaOrbitWatch extends JFrame {
 
@@ -29,29 +30,28 @@ public class VentanaOrbitWatch extends JFrame {
     public VentanaOrbitWatch(CentroControlOrbital centroControl) {
         this.centroControl = centroControl;
 
-        setTitle("OrbitWatch - Monitorización Orbital en Tiempo Real");
+        setTitle("OrbitWatch");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(1220, 740);
-        setMinimumSize(new Dimension(1020, 640));
+        setSize(1260, 760);
+        setMinimumSize(new Dimension(1040, 660));
         setLocationRelativeTo(null);
         getContentPane().setBackground(FONDO_APP);
         setLayout(new BorderLayout(12, 12));
         ((JPanel) getContentPane()).setBorder(new EmptyBorder(12, 14, 14, 14));
 
-        // Instanciar los 3 Observadores Concretos
+        // Instanciar y registrar los observadores visuales
         PanelTelemetria panelTelemetria = new PanelTelemetria();
         RadarProximidad radarProximidad = new RadarProximidad();
         MonitorTripulacion monitorTripulacion = new MonitorTripulacion();
 
-        // Registrar observadores iniciales en el Sujeto
         centroControl.agregarObservador(panelTelemetria);
         centroControl.agregarObservador(radarProximidad);
         centroControl.agregarObservador(monitorTripulacion);
 
-        // 1. Cabecera superior
+        // Cabecera superior
         add(crearCabecera(), BorderLayout.NORTH);
 
-        // 2. Cuerpo principal: Panel de control arriba + Cuadrícula de observadores abajo
+        // Cuerpo principal
         JPanel cuerpo = new JPanel(new BorderLayout(12, 12));
         cuerpo.setOpaque(false);
 
@@ -59,36 +59,47 @@ public class VentanaOrbitWatch extends JFrame {
         txtLongitud = crearCampoTexto("-16.3201", 8);
         txtRadio = crearCampoTexto("1000", 6);
 
-        cuerpo.add(crearBarraControles(panelTelemetria, radarProximidad, monitorTripulacion), BorderLayout.NORTH);
+        cuerpo.add(crearBarraControles(), BorderLayout.NORTH);
 
-        // Configurar clic interactivo en el mapa
+        // Clic directo en el mapa actualiza los campos y el objetivo
         panelTelemetria.setOnMapaClickListener(coord -> {
             txtLatitud.setText(String.format(java.util.Locale.US, "%.4f", coord.getLatitud()));
             txtLongitud.setText(String.format(java.util.Locale.US, "%.4f", coord.getLongitud()));
             aplicarObjetivoDesdeCampos();
         });
 
-        // Panel central dividido (Izquierda 66%: Mapa | Derecha 34%: Radar + Tripulación)
-        JPanel gridObservadores = new JPanel(new GridBagLayout());
-        gridObservadores.setOpaque(false);
+        // Cuadrícula inferior: Izquierda 64% Mapa | Derecha 36% Radar (arriba) + Tripulación (abajo)
+        JPanel gridPrincipal = new JPanel(new GridBagLayout());
+        gridPrincipal.setOpaque(false);
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.fill = GridBagConstraints.BOTH;
         gbc.weighty = 1.0;
 
-        gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0.66;
+        gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0.64;
         gbc.insets = new Insets(0, 0, 0, 12);
-        gridObservadores.add(panelTelemetria, gbc);
+        gridPrincipal.add(panelTelemetria, gbc);
 
-        JPanel columnaDerecha = new JPanel(new GridLayout(2, 1, 0, 12));
+        // Columna derecha equilibrada (26% RadarProximidad, 74% MonitorTripulacion)
+        JPanel columnaDerecha = new JPanel(new GridBagLayout());
         columnaDerecha.setOpaque(false);
-        columnaDerecha.add(radarProximidad);
-        columnaDerecha.add(monitorTripulacion);
+        GridBagConstraints gbcDer = new GridBagConstraints();
+        gbcDer.gridx = 0;
+        gbcDer.fill = GridBagConstraints.BOTH;
+        gbcDer.weightx = 1.0;
 
-        gbc.gridx = 1; gbc.weightx = 0.34;
+        gbcDer.gridy = 0; gbcDer.weighty = 0.26;
+        gbcDer.insets = new Insets(0, 0, 12, 0);
+        columnaDerecha.add(radarProximidad, gbcDer);
+
+        gbcDer.gridy = 1; gbcDer.weighty = 0.74;
+        gbcDer.insets = new Insets(0, 0, 0, 0);
+        columnaDerecha.add(monitorTripulacion, gbcDer);
+
+        gbc.gridx = 1; gbc.weightx = 0.36;
         gbc.insets = new Insets(0, 0, 0, 0);
-        gridObservadores.add(columnaDerecha, gbc);
+        gridPrincipal.add(columnaDerecha, gbc);
 
-        cuerpo.add(gridObservadores, BorderLayout.CENTER);
+        cuerpo.add(gridPrincipal, BorderLayout.CENTER);
         add(cuerpo, BorderLayout.CENTER);
     }
 
@@ -96,10 +107,21 @@ public class VentanaOrbitWatch extends JFrame {
         JPanel header = new JPanel(new BorderLayout());
         header.setOpaque(false);
 
-        JLabel titulo = new JLabel("OrbitWatch - Monitorización Orbital en Tiempo Real");
-        titulo.setFont(new Font("SansSerif", Font.BOLD, 22));
+        JLabel titulo = new JLabel("OrbitWatch");
+        titulo.setFont(new Font("SansSerif", Font.BOLD, 24));
         titulo.setForeground(Color.WHITE);
         header.add(titulo, BorderLayout.WEST);
+
+        JPanel panelDerecho = new JPanel(new FlowLayout(FlowLayout.RIGHT, 14, 0));
+        panelDerecho.setOpaque(false);
+
+        JLabel lblReloj = new JLabel();
+        lblReloj.setFont(new Font("Monospaced", Font.BOLD, 13));
+        lblReloj.setForeground(new Color(200, 210, 225));
+        actualizarTextoReloj(lblReloj);
+
+        Timer timerReloj = new Timer(1000, e -> actualizarTextoReloj(lblReloj));
+        timerReloj.start();
 
         JLabel badgeEnVivo = new JLabel(" ● EN VIVO ");
         badgeEnVivo.setFont(new Font("SansSerif", Font.BOLD, 13));
@@ -110,88 +132,56 @@ public class VentanaOrbitWatch extends JFrame {
                 new LineBorder(new Color(46, 160, 67), 1, true),
                 new EmptyBorder(4, 10, 4, 10)
         ));
-        header.add(badgeEnVivo, BorderLayout.EAST);
+
+        panelDerecho.add(lblReloj);
+        panelDerecho.add(badgeEnVivo);
+        header.add(panelDerecho, BorderLayout.EAST);
 
         return header;
     }
 
-    private JPanel crearBarraControles(PanelTelemetria obs1, RadarProximidad obs2, MonitorTripulacion obs3) {
-        JPanel contenedor = new JPanel(new GridBagLayout());
-        contenedor.setOpaque(false);
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.fill = GridBagConstraints.BOTH;
-        gbc.weighty = 1.0;
+    private void actualizarTextoReloj(JLabel lblReloj) {
+        ZonedDateTime ahoraLocal = ZonedDateTime.now();
+        ZonedDateTime ahoraUTC = ahoraLocal.withZoneSameInstant(ZoneOffset.UTC);
+        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("HH:mm:ss");
+        lblReloj.setText("Local " + ahoraLocal.format(fmt) + "  |  UTC " + ahoraUTC.format(fmt));
+    }
 
-        // Izquierda: Controles del Sujeto
-        JPanel panelSujeto = new JPanel(new GridBagLayout());
-        panelSujeto.setBackground(FONDO_PANEL);
-        panelSujeto.setBorder(new CompoundBorder(
+    private JPanel crearBarraControles() {
+        JPanel panelControl = new JPanel(new FlowLayout(FlowLayout.CENTER, 12, 6));
+        panelControl.setBackground(FONDO_PANEL);
+        panelControl.setBorder(new CompoundBorder(
                 BorderFactory.createTitledBorder(
                         new LineBorder(BORDE_PANEL, 1, true),
-                        " CentroControlOrbital (Sujeto) ",
+                        " Control de Objetivo ",
                         TitledBorder.LEFT, TitledBorder.TOP,
                         new Font("SansSerif", Font.BOLD, 13), Color.WHITE),
-                new EmptyBorder(6, 12, 8, 12)
+                new EmptyBorder(4, 10, 6, 10)
         ));
 
-        GridBagConstraints c = new GridBagConstraints();
-        c.insets = new Insets(4, 6, 4, 6);
-        c.fill = GridBagConstraints.HORIZONTAL;
+        panelControl.add(crearLabel("Latitud:"));
+        panelControl.add(txtLatitud);
 
-        // Fila 1: Inputs
-        c.gridy = 0;
-        c.gridx = 0; panelSujeto.add(crearLabel("Latitud"), c);
-        c.gridx = 1; panelSujeto.add(txtLatitud, c);
-        c.gridx = 2; panelSujeto.add(crearLabel("Longitud"), c);
-        c.gridx = 3; panelSujeto.add(txtLongitud, c);
-        c.gridx = 4; panelSujeto.add(crearLabel("Radio (km)"), c);
-        c.gridx = 5; panelSujeto.add(txtRadio, c);
+        panelControl.add(crearLabel("Longitud:"));
+        panelControl.add(txtLongitud);
 
-        // Fila 2: Botones de acción
-        JButton btnFijar = crearBoton("Fijar Objetivo");
+        panelControl.add(crearLabel("Radio de alerta (km):"));
+        panelControl.add(txtRadio);
+
+        JButton btnFijar = crearBoton("Fijar objetivo");
         btnFijar.addActionListener(e -> aplicarObjetivoDesdeCampos());
+        panelControl.add(btnFijar);
 
-        JButton btnISSActual = crearBoton("Fijar en ISS Actual");
-        btnISSActual.addActionListener(e -> {
-            centroControl.fijarObjetivoEnISSActual();
+        JButton btnCentrarISS = crearBoton("Centrar en ISS");
+        btnCentrarISS.addActionListener(e -> {
+            centroControl.centrarObjetivoEnISS();
             Coordenada pos = centroControl.getPuntoObjetivo();
             txtLatitud.setText(String.format(java.util.Locale.US, "%.4f", pos.getLatitud()));
             txtLongitud.setText(String.format(java.util.Locale.US, "%.4f", pos.getLongitud()));
         });
+        panelControl.add(btnCentrarISS);
 
-        JButton btnSimularAstro = crearBoton("Simular Nuevo Astronauta");
-        btnSimularAstro.addActionListener(e -> centroControl.simularNuevoAstronauta());
-
-        c.gridy = 1;
-        c.gridx = 0; c.gridwidth = 2; panelSujeto.add(btnFijar, c);
-        c.gridx = 2; c.gridwidth = 2; panelSujeto.add(btnISSActual, c);
-        c.gridx = 4; c.gridwidth = 2; panelSujeto.add(btnSimularAstro, c);
-
-        // Derecha: Checkboxes de Observadores Activos
-        JPanel panelSuscripciones = new JPanel(new GridLayout(3, 1, 0, 2));
-        panelSuscripciones.setBackground(FONDO_PANEL);
-        panelSuscripciones.setBorder(new CompoundBorder(
-                BorderFactory.createTitledBorder(
-                        new LineBorder(BORDE_PANEL, 1, true),
-                        " Observadores Activos ",
-                        TitledBorder.LEFT, TitledBorder.TOP,
-                        new Font("SansSerif", Font.BOLD, 13), Color.WHITE),
-                new EmptyBorder(4, 12, 6, 12)
-        ));
-
-        panelSuscripciones.add(crearCheckObservador("PanelTelemetria", obs1));
-        panelSuscripciones.add(crearCheckObservador("RadarProximidad", obs2));
-        panelSuscripciones.add(crearCheckObservador("MonitorTripulacion", obs3));
-
-        gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0.72;
-        gbc.insets = new Insets(0, 0, 0, 12);
-        contenedor.add(panelSujeto, gbc);
-
-        gbc.gridx = 1; gbc.weightx = 0.28;
-        gbc.insets = new Insets(0, 0, 0, 0);
-        contenedor.add(panelSuscripciones, gbc);
-
-        return contenedor;
+        return panelControl;
     }
 
     private void aplicarObjetivoDesdeCampos() {
@@ -206,23 +196,6 @@ public class VentanaOrbitWatch extends JFrame {
                     "Valores no válidos. Revisa latitud (-90 a 90), longitud (-180 a 180) y radio (> 0).",
                     "Error de entrada", JOptionPane.WARNING_MESSAGE);
         }
-    }
-
-    private JCheckBox crearCheckObservador(String nombre, es.ull.practica7.observer.Observador observador) {
-        JCheckBox check = new JCheckBox(nombre, true);
-        check.setOpaque(false);
-        check.setForeground(Color.WHITE);
-        check.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        check.addActionListener(e -> {
-            if (check.isSelected()) {
-                centroControl.agregarObservador(observador);
-                // Notificamos inmediatamente al re-suscribir para que se sincronice
-                observador.actualizar(centroControl);
-            } else {
-                centroControl.eliminarObservador(observador);
-            }
-        });
-        return check;
     }
 
     private JLabel crearLabel(String texto) {
@@ -253,7 +226,7 @@ public class VentanaOrbitWatch extends JFrame {
         btn.setFont(new Font("SansSerif", Font.PLAIN, 13));
         btn.setBorder(new CompoundBorder(
                 new LineBorder(new Color(95, 105, 120), 1, true),
-                new EmptyBorder(6, 12, 6, 12)
+                new EmptyBorder(6, 14, 6, 14)
         ));
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         return btn;
