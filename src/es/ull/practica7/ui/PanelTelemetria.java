@@ -14,6 +14,7 @@ import javax.swing.border.TitledBorder;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.MouseWheelEvent;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Point2D;
 import java.awt.image.BufferedImage;
@@ -24,15 +25,17 @@ import java.util.Objects;
 import java.util.function.Consumer;
 
 /**
- * Observador Concreto 1: Renderiza el mapamundi equirectangular oscuro (proporción fija 2:1),
- * la trayectoria orbital de la ISS, el punto objetivo con su radio de alerta circular
- * y las coordenadas en tiempo real.
+ * Observador Concreto 1: Renderiza el mapamundi equirectangular en alta resolución,
+ * soporta zoom con la rueda del ratón, desplazamiento arrastrando y clic para fijar objetivo.
  */
 public class PanelTelemetria extends JPanel implements Observador {
 
     private static final Color FONDO_PANEL = new Color(33, 37, 43);
     private static final Color BORDE_PANEL = new Color(75, 82, 95);
     private static final String RUTA_RECURSO_MAPA = "/mapa_mundo.png";
+
+    private static final double ZOOM_MIN = 1.0;
+    private static final double ZOOM_MAX = 14.0;
 
     private final BufferedImage imagenMapa;
     private final List<Coordenada> historialTrayectoria = new ArrayList<>();
@@ -95,27 +98,36 @@ public class PanelTelemetria extends JPanel implements Observador {
                 getClass().getResourceAsStream(RUTA_RECURSO_MAPA),
                 "No se encontró el archivo " + RUTA_RECURSO_MAPA + " en resources")) {
 
-            BufferedImage imgOriginal = ImageIO.read(is);
-            BufferedImage mapaOscuro = new BufferedImage(
-                    imgOriginal.getWidth(), imgOriginal.getHeight(), BufferedImage.TYPE_INT_RGB);
+            BufferedImage imgLeida = ImageIO.read(is);
 
-            // Transforma la imagen equirectangular a tonos oscuros azulados/grisáceos de alto contraste
-            for (int y = 0; y < imgOriginal.getHeight(); y++) {
-                for (int x = 0; x < imgOriginal.getWidth(); x++) {
-                    Color c = new Color(imgOriginal.getRGB(x, y));
-                    // Detectamos si es océano (predominio de azul) o tierra
-                    boolean esOceano = (c.getBlue() > c.getRed() + 12) && (c.getBlue() > c.getGreen());
-                    if (esOceano) {
-                        mapaOscuro.setRGB(x, y, new Color(18, 22, 29).getRGB());
-                    } else {
-                        int luminancia = (c.getRed() + c.getGreen() + c.getBlue()) / 3;
-                        int r = Math.min(255, 44 + (luminancia / 9));
-                        int g = Math.min(255, 50 + (luminancia / 9));
-                        int b = Math.min(255, 62 + (luminancia / 8));
-                        mapaOscuro.setRGB(x, y, new Color(r, g, b).getRGB());
-                    }
+            // Escalamos 5120x2560
+            int w = 5120;
+            int h = 2560;
+            BufferedImage mapaOscuro = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+            Graphics2D g2 = mapaOscuro.createGraphics();
+            g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g2.drawImage(imgLeida, 0, 0, w, h, null);
+            g2.dispose();
+
+            int[] pixeles = mapaOscuro.getRGB(0, 0, w, h, null, 0, w);
+            for (int i = 0; i < pixeles.length; i++) {
+                int rgb = pixeles[i];
+                int rOrig = (rgb >> 16) & 0xFF;
+                int gOrig = (rgb >> 8) & 0xFF;
+                int bOrig = rgb & 0xFF;
+
+                boolean esOceano = (bOrig > rOrig + 12) && (bOrig > gOrig);
+                if (esOceano) {
+                    pixeles[i] = (18 << 16) | (22 << 8) | 29;
+                } else {
+                    int luminancia = (rOrig + gOrig + bOrig) / 3;
+                    int r = Math.min(255, 48 + (luminancia / 8));
+                    int g = Math.min(255, 55 + (luminancia / 8));
+                    int b = Math.min(255, 68 + (luminancia / 7));
+                    pixeles[i] = (r << 16) | (g << 8) | b;
                 }
             }
+            mapaOscuro.setRGB(0, 0, w, h, pixeles, 0, w);
             return mapaOscuro;
         } catch (Exception e) {
             throw new RuntimeException("Error cargando el recurso del mapa mundial: " + e.getMessage(), e);
@@ -124,42 +136,132 @@ public class PanelTelemetria extends JPanel implements Observador {
 
     private class LienzoMapa extends JPanel {
 
+        private double zoom = 1.0;
+        // Desplazamiento normalizado [0..1] de la esquina superior izquierda visible dentro del mapa
+        private double vistaX = 0.0;
+        private double vistaY = 0.0;
+
+        private Point puntoPresionado;
+        private boolean arrastrando = false;
+
         public LienzoMapa() {
             setBackground(new Color(14, 17, 22));
             setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
 
-            addMouseListener(new MouseAdapter() {
+            MouseAdapter mouseHandler = new MouseAdapter() {
                 @Override
-                public void mouseClicked(MouseEvent e) {
-                    Rectangle areaMapa = calcularAreaMapaFija();
-                    if (!areaMapa.contains(e.getPoint())) return;
+                public void mousePressed(MouseEvent e) {
+                    puntoPresionado = e.getPoint();
+                    arrastrando = false;
+                }
 
-                    double relX = (e.getX() - areaMapa.x) / (double) areaMapa.width;
-                    double relY = (e.getY() - areaMapa.y) / (double) areaMapa.height;
+                @Override
+                public void mouseDragged(MouseEvent e) {
+                    if (puntoPresionado == null || zoom <= 1.0) return;
 
-                    double lon = (relX * 360.0) - 180.0;
-                    double lat = 90.0 - (relY * 180.0);
+                    Rectangle area = calcularAreaMapaBase();
+                    int dx = e.getX() - puntoPresionado.x;
+                    int dy = e.getY() - puntoPresionado.y;
 
-                    lat = Math.max(-90.0, Math.min(90.0, lat));
-                    lon = Math.max(-180.0, Math.min(180.0, lon));
+                    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+                        arrastrando = true;
+                        setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
+                    }
 
-                    if (onMapaClickListener != null) {
-                        onMapaClickListener.accept(new Coordenada(lat, lon));
+                    if (arrastrando) {
+                        vistaX -= dx / (area.width * zoom);
+                        vistaY -= dy / (area.height * zoom);
+                        limitarVista();
+                        puntoPresionado = e.getPoint();
+                        repaint();
                     }
                 }
-            });
+
+                @Override
+                public void mouseReleased(MouseEvent e) {
+                    setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
+                    if (!arrastrando) {
+                        if (e.getClickCount() == 2) {
+                            // Doble clic resetea el zoom a vista global
+                            zoom = 1.0;
+                            vistaX = 0.0;
+                            vistaY = 0.0;
+                            repaint();
+                        } else {
+                            procesarClicObjetivo(e.getPoint());
+                        }
+                    }
+                    arrastrando = false;
+                }
+
+                @Override
+                public void mouseWheelMoved(MouseWheelEvent e) {
+                    Rectangle area = calcularAreaMapaBase();
+                    if (!area.contains(e.getPoint())) return;
+
+                    // Posición relativa del ratón dentro del área base [0..1]
+                    double mouseRelX = (e.getX() - area.x) / (double) area.width;
+                    double mouseRelY = (e.getY() - area.y) / (double) area.height;
+
+                    // Coordenada normalizada del mapa bajo el cursor antes del zoom
+                    double mapaNormX = vistaX + mouseRelX / zoom;
+                    double mapaNormY = vistaY + mouseRelY / zoom;
+
+                    double factor = e.getWheelRotation() < 0 ? 1.25 : 0.8;
+                    double nuevoZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom * factor));
+
+                    if (Math.abs(nuevoZoom - zoom) > 0.001) {
+                        zoom = nuevoZoom;
+                        // Recalcular vistaX/vistaY para mantener el punto bajo el cursor en su sitio
+                        vistaX = mapaNormX - mouseRelX / zoom;
+                        vistaY = mapaNormY - mouseRelY / zoom;
+                        limitarVista();
+                        repaint();
+                    }
+                }
+            };
+
+            addMouseListener(mouseHandler);
+            addMouseMotionListener(mouseHandler);
+            addMouseWheelListener(mouseHandler);
+        }
+
+        private void limitarVista() {
+            double maxVista = 1.0 - (1.0 / zoom);
+            vistaX = Math.max(0.0, Math.min(maxVista, vistaX));
+            vistaY = Math.max(0.0, Math.min(maxVista, vistaY));
+        }
+
+        private void procesarClicObjetivo(Point p) {
+            Rectangle area = calcularAreaMapaBase();
+            if (!area.contains(p)) return;
+
+            double relX = (p.x - area.x) / (double) area.width;
+            double relY = (p.y - area.y) / (double) area.height;
+
+            double mapaNormX = vistaX + relX / zoom;
+            double mapaNormY = vistaY + relY / zoom;
+
+            double lon = (mapaNormX * 360.0) - 180.0;
+            double lat = 90.0 - (mapaNormY * 180.0);
+
+            lat = Math.max(-90.0, Math.min(90.0, lat));
+            lon = Math.max(-180.0, Math.min(180.0, lon));
+
+            if (onMapaClickListener != null) {
+                onMapaClickListener.accept(new Coordenada(lat, lon));
+            }
         }
 
         /**
-         * Calcula el rectángulo centrado con proporción exacta 2:1 (360° x 180°)
-         * para que el mapa nunca se estire ni deforme al cambiar el tamaño de la ventana.
+         * Calcula el rectángulo centrado con proporción exacta 2:1 (360° x 180°).
          */
-        private Rectangle calcularAreaMapaFija() {
+        private Rectangle calcularAreaMapaBase() {
             int panelW = getWidth();
             int panelH = getHeight();
             if (panelW <= 0 || panelH <= 0) return new Rectangle(0, 0, 1, 1);
 
-            double aspectoObjetivo = 2.0; // 360 grados / 180 grados
+            double aspectoObjetivo = 2.0;
             int mapW = panelW;
             int mapH = (int) Math.round(panelW / aspectoObjetivo);
 
@@ -180,20 +282,30 @@ public class PanelTelemetria extends JPanel implements Observador {
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
 
-            Rectangle area = calcularAreaMapaFija();
+            Rectangle area = calcularAreaMapaBase();
 
-            // 1. Imagen del mapamundi equirectangular sin deformación
-            g2.drawImage(imagenMapa, area.x, area.y, area.width, area.height, null);
+            // Recortamos el dibujo exactamente al rectángulo del mapa para que al hacer zoom no se salga
+            Shape clipAnterior = g2.getClip();
+            g2.setClip(area);
+
+            // 1. Dibujar recorte de alta resolución correspondiente al zoom y desplazamiento actuales
+            int imgW = imagenMapa.getWidth();
+            int imgH = imagenMapa.getHeight();
+            int srcX1 = (int) Math.round(vistaX * imgW);
+            int srcY1 = (int) Math.round(vistaY * imgH);
+            int srcX2 = (int) Math.round((vistaX + 1.0 / zoom) * imgW);
+            int srcY2 = (int) Math.round((vistaY + 1.0 / zoom) * imgH);
+
+            g2.drawImage(imagenMapa,
+                    area.x, area.y, area.x + area.width, area.y + area.height,
+                    srcX1, srcY1, srcX2, srcY2, null);
+
             dibujarCuadriculaCoordenadas(g2, area);
 
-            // Borde sutil alrededor del área exacta del mapa
-            g2.setColor(new Color(65, 72, 85));
-            g2.drawRect(area.x, area.y, area.width - 1, area.height - 1);
-
-            // 2. Círculo perfecto de Radio de Alerta alrededor del punto objetivo
+            // 2. Círculo perfecto de Radio de Alerta escalado según el zoom
             Point2D.Double pObj = coordenadaAPixel(puntoObjetivo, area);
             double gradosAprox = radioAlertaKm / 111.32;
-            double radioPx = (gradosAprox / 360.0) * area.width;
+            double radioPx = (gradosAprox / 360.0) * area.width * zoom;
 
             g2.setColor(new Color(220, 53, 69, 45));
             g2.fill(new Ellipse2D.Double(pObj.x - radioPx, pObj.y - radioPx, radioPx * 2, radioPx * 2));
@@ -225,32 +337,45 @@ public class PanelTelemetria extends JPanel implements Observador {
             Point2D.Double pISS = coordenadaAPixel(posicionActualISS, area);
             dibujarIconoISS(g2, (int) pISS.x, (int) pISS.y);
 
-            // 6. Recuadro superpuesto inferior izquierdo con telemetría numérica
+            g2.setClip(clipAnterior);
+
+            // Borde del área del mapa
+            g2.setColor(new Color(65, 72, 85));
+            g2.drawRect(area.x, area.y, area.width - 1, area.height - 1);
+
+            // 6. Recuadro superpuesto inferior izquierdo con telemetría y nivel de zoom
             dibujarOverlayTelemetria(g2, getHeight());
 
             g2.dispose();
         }
 
         private Point2D.Double coordenadaAPixel(Coordenada c, Rectangle area) {
-            double x = area.x + ((c.getLongitud() + 180.0) / 360.0) * area.width;
-            double y = area.y + ((90.0 - c.getLatitud()) / 180.0) * area.height;
+            double normX = (c.getLongitud() + 180.0) / 360.0;
+            double normY = (90.0 - c.getLatitud()) / 180.0;
+
+            double x = area.x + ((normX - vistaX) * zoom) * area.width;
+            double y = area.y + ((normY - vistaY) * zoom) * area.height;
             return new Point2D.Double(x, y);
         }
 
         private void dibujarCuadriculaCoordenadas(Graphics2D g2, Rectangle area) {
-            g2.setColor(new Color(255, 255, 255, 18));
+            g2.setColor(new Color(255, 255, 255, 16));
             g2.setStroke(new BasicStroke(1f));
             for (int lon = -150; lon <= 150; lon += 30) {
-                int x = area.x + (int) (((lon + 180.0) / 360.0) * area.width);
+                double normX = (lon + 180.0) / 360.0;
+                int x = area.x + (int) (((normX - vistaX) * zoom) * area.width);
                 g2.drawLine(x, area.y, x, area.y + area.height);
             }
             for (int lat = -60; lat <= 60; lat += 30) {
-                int y = area.y + (int) (((90.0 - lat) / 180.0) * area.height);
+                double normY = (90.0 - lat) / 180.0;
+                int y = area.y + (int) (((normY - vistaY) * zoom) * area.height);
                 g2.drawLine(area.x, y, area.x + area.width, y);
             }
-            g2.setColor(new Color(255, 255, 255, 40));
-            g2.drawLine(area.x, area.y + area.height / 2, area.x + area.width, area.y + area.height / 2);
-            g2.drawLine(area.x + area.width / 2, area.y, area.x + area.width / 2, area.y + area.height);
+            g2.setColor(new Color(255, 255, 255, 35));
+            int yEcuador = area.y + (int) (((0.5 - vistaY) * zoom) * area.height);
+            int xGreenwich = area.x + (int) (((0.5 - vistaX) * zoom) * area.width);
+            g2.drawLine(area.x, yEcuador, area.x + area.width, yEcuador);
+            g2.drawLine(xGreenwich, area.y, xGreenwich, area.y + area.height);
         }
 
         private void dibujarPinObjetivo(Graphics2D g2, int x, int y) {
@@ -283,11 +408,11 @@ public class PanelTelemetria extends JPanel implements Observador {
 
         private void dibujarOverlayTelemetria(Graphics2D g2, int panelH) {
             int boxX = 14;
-            int boxY = panelH - 88;
-            int boxW = 245;
-            int boxH = 74;
+            int boxY = panelH - 94;
+            int boxW = 285;
+            int boxH = 80;
 
-            g2.setColor(new Color(22, 26, 33, 220));
+            g2.setColor(new Color(22, 26, 33, 225));
             g2.fillRoundRect(boxX, boxY, boxW, boxH, 10, 10);
             g2.setColor(new Color(80, 88, 102));
             g2.drawRoundRect(boxX, boxY, boxW, boxH, 10, 10);
@@ -298,11 +423,11 @@ public class PanelTelemetria extends JPanel implements Observador {
             g2.setColor(Color.WHITE);
             g2.setFont(new Font("SansSerif", Font.BOLD, 13));
             g2.drawString(String.format("Latitud:  %.4f %s", Math.abs(posicionActualISS.getLatitud()), hemLat), boxX + 12, boxY + 22);
-            g2.drawString(String.format("Longitud: %.4f %s", Math.abs(posicionActualISS.getLongitud()), hemLon), boxX + 12, boxY + 42);
+            g2.drawString(String.format("Longitud: %.4f %s   (Zoom: %.1fx)", Math.abs(posicionActualISS.getLongitud()), hemLon, zoom), boxX + 12, boxY + 42);
 
             g2.setColor(new Color(165, 175, 190));
             g2.setFont(new Font("SansSerif", Font.PLAIN, 11));
-            g2.drawString("Clic en mapa para fijar objetivo (" + horaActualizacion + ")", boxX + 12, boxY + 62);
+            g2.drawString("Rueda: zoom | Arrastrar: mover | Doble clic: reset", boxX + 12, boxY + 64);
         }
     }
 }
