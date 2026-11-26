@@ -14,24 +14,28 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Implementación concreta que consulta las APIs públicas de Open Notify
- * utilizando el cliente HTTP nativo de Java.
+ * Implementación concreta que consulta telemetría orbital actualizada en tiempo real
+ * desde WhereTheISSAt (posición NORAD) y Corquaid API (tripulación activa).
  */
-public class ClienteOpenNotify implements ProveedorDatosOrbitales {
+public class ClienteAPIsOrbitales implements ProveedorDatosOrbitales {
 
-    private static final String URL_ISS_NOW = "http://api.open-notify.org/iss-now.json";
-    private static final String URL_ASTROS = "http://api.open-notify.org/astros.json";
+    private static final String URL_ISS_NOW = "https://api.wheretheiss.at/v1/satellites/25544";
+    private static final String URL_ASTROS = "https://corquaid.github.io/international-space-station-APIs/JSON/people-in-space.json";
 
-    private static final Pattern PATRON_LAT = Pattern.compile("\"latitude\"\\s*:\\s*\"([^\"]+)\"");
-    private static final Pattern PATRON_LON = Pattern.compile("\"longitude\"\\s*:\\s*\"([^\"]+)\"");
-    private static final Pattern PATRON_ASTRO = Pattern.compile("\\{\\s*\"craft\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"name\"\\s*:\\s*\"([^\"]+)\"\\s*\\}");
-    private static final Pattern PATRON_ASTRO_INV = Pattern.compile("\\{\\s*\"name\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"craft\"\\s*:\\s*\"([^\"]+)\"\\s*\\}");
+    // En wheretheiss.at los valores vienen como números decimales (ej: "latitude": -51.725749)
+    private static final Pattern PATRON_LAT = Pattern.compile("\"latitude\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+    private static final Pattern PATRON_LON = Pattern.compile("\"longitude\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+
+    // En corquaid cada objeto de tripulante contiene "name" y "spacecraft" (o "craft")
+    private static final Pattern PATRON_OBJETO_PERSONA = Pattern.compile("\\{[^{}]*\"name\"\\s*:\\s*\"([^\"]+)\"[^{}]*\\}");
+    private static final Pattern PATRON_NAVE = Pattern.compile("\"(?:spacecraft|craft)\"\\s*:\\s*\"([^\"]+)\"");
 
     private final HttpClient httpClient;
 
-    public ClienteOpenNotify() {
+    public ClienteAPIsOrbitales() {
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
+                .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
     }
 
@@ -47,7 +51,7 @@ public class ClienteOpenNotify implements ProveedorDatosOrbitales {
             double lon = Double.parseDouble(mLon.group(1));
             return new Coordenada(lat, lon);
         }
-        throw new IllegalStateException("Formato inesperado en iss-now.json");
+        throw new IllegalStateException("Formato inesperado en respuesta de WhereTheISSAt");
     }
 
     @Override
@@ -55,16 +59,15 @@ public class ClienteOpenNotify implements ProveedorDatosOrbitales {
         String json = realizarPeticionGet(URL_ASTROS);
         List<Astronauta> tripulacion = new ArrayList<>();
 
-        Matcher m1 = PATRON_ASTRO.matcher(json);
-        while (m1.find()) {
-            tripulacion.add(new Astronauta(m1.group(2), m1.group(1)));
-        }
+        Matcher mPersona = PATRON_OBJETO_PERSONA.matcher(json);
+        while (mPersona.find()) {
+            String bloquePersona = mPersona.group(0);
+            String nombre = mPersona.group(1);
 
-        if (tripulacion.isEmpty()) {
-            Matcher m2 = PATRON_ASTRO_INV.matcher(json);
-            while (m2.find()) {
-                tripulacion.add(new Astronauta(m2.group(1), m2.group(2)));
-            }
+            Matcher mNave = PATRON_NAVE.matcher(bloquePersona);
+            String nave = mNave.find() ? mNave.group(1) : "ISS";
+
+            tripulacion.add(new Astronauta(nombre, nave));
         }
 
         return tripulacion;
@@ -73,6 +76,7 @@ public class ClienteOpenNotify implements ProveedorDatosOrbitales {
     private String realizarPeticionGet(String url) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
+                .header("User-Agent", "OrbitWatchApp/1.0")
                 .timeout(Duration.ofSeconds(5))
                 .GET()
                 .build();
