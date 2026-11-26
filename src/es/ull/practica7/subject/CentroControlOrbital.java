@@ -56,7 +56,7 @@ public class CentroControlOrbital extends Sujeto {
 
             notificar();
         } catch (Exception e) {
-            System.err.println("Error al consultar la API de Open Notify: " + e.getMessage());
+            System.err.println("Error al consultar las APIs orbitales: " + e.getMessage());
         }
     }
 
